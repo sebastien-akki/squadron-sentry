@@ -1,0 +1,202 @@
+{
+  "id": "sentry",
+  "version": "0.1.0",
+  "api": 1,
+  "squadron": ">=0.59.0",
+  "name": {
+    "en": "Sentry",
+    "fr": "Sentry"
+  },
+  "description": {
+    "en": "The Sentry errors of each project next to your agents. Each new or returning error comes with a notification and a fix proposed by Claude Code, which reads the repository without changing it; one click opens an agent to apply it. Agents can read the errors and their stack traces.",
+    "fr": "Les erreurs Sentry de chaque projet à côté de vos agents. Chaque erreur nouvelle ou revenue arrive avec une notification et une correction proposée par Claude Code, qui lit le dépôt sans le modifier ; un clic ouvre un agent pour l’appliquer. Les agents peuvent lire les erreurs et leurs stack traces."
+  },
+  "logo": "logo.svg",
+  "wasm": "target/wasm32-wasip2/release/sentry.wasm",
+  "permissions": {
+    "exec": [
+      "claude"
+    ]
+  },
+  "contributes": {
+    "accounts": {
+      "label": {
+        "en": "Sentry organizations",
+        "fr": "Organisations Sentry"
+      },
+      "check": true,
+      "fields": [
+        {
+          "id": "host",
+          "kind": "host",
+          "label": {
+            "en": "Sentry server",
+            "fr": "Serveur Sentry"
+          },
+          "hint": {
+            "en": "sentry.io, de.sentry.io for the EU, or your own server",
+            "fr": "sentry.io, de.sentry.io pour l’UE, ou votre serveur"
+          }
+        },
+        {
+          "id": "org",
+          "label": {
+            "en": "Organization",
+            "fr": "Organisation"
+          },
+          "hint": {
+            "en": "The slug in your Sentry address",
+            "fr": "Le slug dans l’adresse de votre Sentry"
+          }
+        },
+        {
+          "id": "token",
+          "kind": "secret",
+          "label": {
+            "en": "Personal token",
+            "fr": "Jeton personnel"
+          },
+          "hint": {
+            "en": "Create a personal token with these scopes",
+            "fr": "Créez un jeton personnel avec ces droits"
+          },
+          "url": "https://sentry.io/settings/account/api/auth-tokens/",
+          "copy": [
+            "event:read",
+            "event:write",
+            "org:read"
+          ]
+        }
+      ]
+    },
+    "items": [
+      {
+        "slot": "agent.tools",
+        "id": "sentry",
+        "label": {
+          "en": "Sentry",
+          "fr": "Sentry"
+        },
+        "hint": {
+          "en": "The Sentry errors of this project",
+          "fr": "Les erreurs Sentry de ce projet"
+        },
+        "icon": "logo",
+        "words": [
+          "sentry",
+          "errors",
+          "erreurs",
+          "bugs",
+          "production"
+        ],
+        "action": {
+          "panel.open": "main"
+        }
+      }
+    ],
+    "panels": [
+      {
+        "id": "main",
+        "title": {
+          "en": "Sentry",
+          "fr": "Sentry"
+        },
+        "page": "panel/index.html"
+      }
+    ],
+    "tools": [
+      {
+        "name": "issues",
+        "description": "Lists the unresolved Sentry issues of the last 14 days for this Squadron project: short id, title, events, users, last seen."
+      },
+      {
+        "name": "issue",
+        "description": "Reads one Sentry issue of this project: its details, request, exception and stack trace with the code around each line, and the fix proposed when it came in, if any.",
+        "input": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "description": "The short id, such as SHOP-1A, or the numeric id, as sentry_issues gives it."
+            }
+          },
+          "required": [
+            "id"
+          ]
+        }
+      }
+    ],
+    "settings": {
+      "options": [
+        {
+          "id": "auto",
+          "label": {
+            "en": "Propose a fix for each new or returning error",
+            "fr": "Proposer une correction pour chaque erreur nouvelle ou revenue"
+          },
+          "hint": {
+            "en": "Claude Code reads the repository with read-only tools; each proposal uses your Claude plan.",
+            "fr": "Claude Code lit le dépôt avec des outils en lecture seule ; chaque proposition compte sur votre forfait Claude."
+          },
+          "kind": "toggle",
+          "default": true
+        },
+        {
+          "id": "model",
+          "label": {
+            "en": "Model for the proposals",
+            "fr": "Modèle des propositions"
+          },
+          "kind": "select",
+          "default": "sonnet",
+          "choices": [
+            {
+              "value": "sonnet",
+              "label": {
+                "en": "Sonnet",
+                "fr": "Sonnet"
+              }
+            },
+            {
+              "value": "opus",
+              "label": {
+                "en": "Opus",
+                "fr": "Opus"
+              }
+            },
+            {
+              "value": "haiku",
+              "label": {
+                "en": "Haiku",
+                "fr": "Haiku"
+              }
+            }
+          ]
+        },
+        {
+          "id": "interval",
+          "label": {
+            "en": "Check Sentry every (minutes)",
+            "fr": "Interroger Sentry toutes les (minutes)"
+          },
+          "kind": "number",
+          "min": 1,
+          "max": 60,
+          "default": 5
+        },
+        {
+          "id": "environments",
+          "label": {
+            "en": "Environments",
+            "fr": "Environnements"
+          },
+          "hint": {
+            "en": "Comma separated, such as production. Empty: all.",
+            "fr": "Séparés par des virgules, comme production. Vide : tous."
+          },
+          "kind": "text"
+        }
+      ]
+    }
+  }
+}

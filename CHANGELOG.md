@@ -1,6 +1,7 @@
 ## 0.2.0 · 2026-11-27
 
-- Triage by Haiku: issues of one project with the same cause grouped, with **Merge in Sentry**; issues with nothing to fix (a deployment, a local environment, a test) set aside with their reason, to resolve or ignore one by one or all at once. They get no automatic analysis.
+- Triage by Haiku: issues of one project with the same cause grouped, with **Merge in Sentry**.
+- Issues with nothing to fix (a deployment, a local environment, a test) set aside with their reason, to resolve or ignore one by one or all at once; they get no automatic analysis.
 - **Not seen for [n] days › List**: the unresolved issues with no event for that many days, the number kept per project, to resolve when you choose.
 - The analysis now writes a diagnosis, a numbered plan and what to check. **Analyse and plan** runs it on any issue when automatic analysis is off.
 - **Fix with an agent** asks the agent to show its plan and wait for your go-ahead before changing any file.

@@ -1,6 +1,7 @@
 ## 0.2.0 · 2026-11-27
 
-- Tri par Haiku : les erreurs d’un même projet de même cause regroupées, avec **Fusionner dans Sentry** ; celles qui n’ont rien à corriger (une mise en production, un environnement local, un test) mises de côté avec leur raison, à résoudre ou ignorer une à une ou toutes d’un coup. Elles ne sont pas analysées automatiquement.
+- Tri par Haiku : les erreurs d’un même projet de même cause regroupées, avec **Fusionner dans Sentry**.
+- Les erreurs qui n’ont rien à corriger (une mise en production, un environnement local, un test) mises de côté avec leur raison, à résoudre ou ignorer une à une ou toutes d’un coup ; elles ne sont pas analysées automatiquement.
 - **Sans occurrence depuis [n] jours › Lister** : les erreurs non résolues sans événement depuis ce nombre de jours, retenu par projet, à résoudre quand vous le décidez.
 - L’analyse écrit maintenant un diagnostic, un plan numéroté et ce qu’il faut vérifier. **Analyser et planifier** la lance sur n’importe quelle erreur quand l’analyse automatique est coupée.
 - **Corriger avec un agent** demande à l’agent de présenter son plan et d’attendre votre accord avant de modifier un fichier.

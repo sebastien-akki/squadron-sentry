@@ -110,19 +110,27 @@ fn api_many(acc: &Acc, method: &str, paths: &[String], body: Option<String>) -> 
 }
 
 fn list(acc: &Acc, project_ids: &[&str]) -> Result<Vec<Issue>, String> {
-    search(acc, project_ids, "is:unresolved", "14d", 50)
+    search(acc, project_ids, "is:unresolved", "14d", 50, "date").map(|(l, _)| l)
 }
 
-fn search(acc: &Acc, project_ids: &[&str], query: &str, period: &str, limit: u32) -> Result<Vec<Issue>, String> {
-    let mut path = format!("issues/?query={}&sort=date&limit={limit}&statsPeriod={period}", encode(query));
+fn sort_of(sort: &str) -> &str {
+    if ["date", "new", "freq", "user"].contains(&sort) { sort } else { "date" }
+}
+
+// Sentry gives the number of matching issues in X-Hits, beyond the page it returns.
+fn search(acc: &Acc, project_ids: &[&str], query: &str, period: &str, limit: u32, sort: &str) -> Result<(Vec<Issue>, u64), String> {
+    let mut path = format!("issues/?query={}&sort={}&limit={limit}&statsPeriod={period}", encode(query), sort_of(sort));
     for p in project_ids {
         path.push_str(&format!("&project={}", encode(p)));
     }
     for env in option("environments").as_str().unwrap_or_default().split(',').map(str::trim).filter(|e| !e.is_empty()) {
         path.push_str(&format!("&environment={}", encode(env)));
     }
-    let v = api(acc, "GET", &path, None)?;
-    Ok(sentry::issues(&v.to_string()))
+    let r = host::fetch(&request(&acc.id, &acc.host, "GET", &org_path(acc, &path), None))?;
+    let hits = r.headers.iter().find(|(k, _)| k.eq_ignore_ascii_case("x-hits")).and_then(|(_, v)| v.trim().parse().ok());
+    let list = sentry::issues(&reply(r, &path)?.to_string());
+    let total = hits.unwrap_or(list.len() as u64);
+    Ok((list, total))
 }
 
 fn follows() -> Vec<Follow> {
@@ -303,17 +311,19 @@ fn post(message: Value) {
     host::panel_post("main", &message.to_string());
 }
 
-fn issues_of(folder: &str) -> (Vec<Value>, Vec<String>) {
+fn issues_of(folder: &str, sort: &str) -> (Vec<Value>, Vec<String>, u64) {
     let mine: Vec<Follow> = follows().into_iter().filter(|f| f.folder == folder).collect();
     let mut out = Vec::new();
     let mut errors = Vec::new();
+    let mut total = 0;
     for acc in accounts() {
         let ids: Vec<&str> = mine.iter().filter(|f| f.account == acc.id).map(|f| f.project_id.as_str()).collect();
         if ids.is_empty() {
             continue;
         }
-        match list(&acc, &ids) {
-            Ok(list) => {
+        match search(&acc, &ids, "is:unresolved", "14d", 100, sort) {
+            Ok((list, hits)) => {
+                total += hits;
                 for i in list {
                     let p: Option<Proposal> = host::state_get(&proposal_key(&acc.id, &i.id)).and_then(|s| serde_json::from_str(&s).ok());
                     out.push(json!({ "account": acc.id, "issue": i, "proposal": p }));
@@ -322,15 +332,15 @@ fn issues_of(folder: &str) -> (Vec<Value>, Vec<String>) {
             Err(e) => errors.push(format!("{} · {}: {e}", acc.host, acc.org)),
         }
     }
-    (out, errors)
+    (out, errors, total)
 }
 
-fn init(agent: &Agent) -> Value {
+fn init(agent: &Agent, sort: &str) -> Value {
     let accs: Vec<Value> = accounts().iter().map(|a| json!({ "id": a.id, "label": format!("{} · {}", a.org, a.host) })).collect();
     let mine: Vec<Follow> = follows().into_iter().filter(|f| f.folder == agent.project).collect();
-    let (issues, errors) = issues_of(&agent.project);
+    let (issues, errors, total) = issues_of(&agent.project, sort);
     let triage = sorted(&issues);
-    json!({ "type": "init", "accounts": accs, "follows": mine, "issues": issues, "errors": errors, "triage": triage, "days": days(&agent.project), "auto": option("auto") != false })
+    json!({ "type": "init", "accounts": accs, "follows": mine, "issues": issues, "total": total, "sort": sort_of(sort), "errors": errors, "triage": triage, "days": days(&agent.project), "auto": option("auto") != false })
 }
 
 fn days(folder: &str) -> u64 {
@@ -348,7 +358,7 @@ fn stale(folder: &str, days: u64) -> Result<Value, String> {
         if ids.is_empty() {
             continue;
         }
-        let found = search(&acc, &ids, &format!("is:unresolved lastSeen:+{days}d"), "90d", 100)?;
+        let found = search(&acc, &ids, &format!("is:unresolved lastSeen:+{days}d"), "90d", 100, "date")?.0;
         out.extend(found.into_iter().map(|i| json!({ "account": acc.id, "issue": i })));
     }
     Ok(json!({ "type": "stale", "days": days, "issues": out }))
@@ -414,6 +424,7 @@ fn draft(agent: &Agent, account_id: &str, id: &str) -> Result<(), String> {
 
 fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
     let text = |k: &str| m[k].as_str().unwrap_or_default().to_string();
+    let sort = text("sort");
     Ok(match kind {
         "ready" => {
             if let Some(lang) = m["lang"].as_str() {
@@ -421,9 +432,9 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
             }
             put("unread", &0u64);
             host::set_badge("sentry", None);
-            init(agent)
+            init(agent, &sort)
         }
-        "refresh" => init(agent),
+        "refresh" => init(agent, &sort),
         "projects" => projects(),
         "follow" => {
             let f = Follow { folder: agent.project.clone(), account: text("account"), project_id: text("project"), slug: text("slug") };
@@ -434,7 +445,7 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
             }
             put("follows", &all);
             host::set_timer(10);
-            init(agent)
+            init(agent, &sort)
         }
         "detail" => {
             let acc = account(&text("account"))?;
@@ -456,7 +467,7 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
             let ids: Vec<String> = m["ids"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_else(|| vec![text("id")]);
             let paths: Vec<String> = ids.iter().map(|id| format!("issues/{}/", encode(id))).collect();
             api_many(&acc, "PUT", &paths, Some(json!({ "status": status }).to_string())).into_iter().collect::<Result<Vec<_>, _>>()?;
-            init(agent)
+            init(agent, &sort)
         }
         "merge" => {
             let acc = account(&text("account"))?;
@@ -465,7 +476,7 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
                 return Err(t!("Il faut au moins deux erreurs à fusionner.", "Merging needs at least two errors."));
             }
             api(&acc, "PUT", &format!("issues/?project={}&{}", encode(&text("project")), ids.join("&")), Some(json!({ "merge": 1 }).to_string()))?;
-            init(agent)
+            init(agent, &sort)
         }
         "stale" => stale(&agent.project, m["days"].as_u64().unwrap_or(30))?,
         "triage" => {
@@ -479,7 +490,7 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
                 let found = list(&acc, &ids.iter().map(String::as_str).collect::<Vec<_>>())?;
                 triage(&acc, &found, true);
             }
-            init(agent)
+            init(agent, &sort)
         }
         _ => return Err(format!("Unknown request {kind}.")),
     })
@@ -509,7 +520,7 @@ impl Extension for Sentry {
 
     fn call_tool(name: String, input: String, agent: Option<Agent>) -> Result<String, String> {
         let agent = agent.ok_or("Call this tool from an agent started by Squadron.")?;
-        let (issues, errors) = issues_of(&agent.project);
+        let (issues, errors, _) = issues_of(&agent.project, "date");
         if issues.is_empty() && errors.is_empty() && !follows().iter().any(|f| f.folder == agent.project) {
             return Err("No Sentry project is followed for this Squadron project: ask the user to choose one in the Sentry panel.".into());
         }

@@ -52,6 +52,23 @@ const T = fr
       list: 'Lister',
       staleNone: (d) => `Aucune erreur non résolue sans occurrence depuis ${d} jours.`,
       staleCount: (n, d) => `${n} erreur${n > 1 ? 's' : ''} sans occurrence depuis ${d} jours :`,
+      total: (n) => `${n} erreur${n > 1 ? 's' : ''} non résolue${n > 1 ? 's' : ''} sur 14 jours`,
+      shown: (n) => `les ${n} premières affichées`,
+      sortBy: 'Trier par',
+      sorts: { date: 'Dernière occurrence', new: 'Plus récentes', freq: 'Plus d’occurrences', user: 'Plus d’utilisateurs' },
+      colError: 'Erreur',
+      colCount: 'Occurrences',
+      colAge: 'Âge',
+      ageHint: (d) => `Première occurrence : ${d}`,
+      selectAll: 'Tout sélectionner',
+      select: 'Sélectionner',
+      selected: (n) => `${n} sélectionnée${n > 1 ? 's' : ''}`,
+      clear: 'Désélectionner',
+      mergeNeeds: 'Fusionner demande au moins deux erreurs du même projet Sentry.',
+      check: 'Cocher ces erreurs',
+      units: { min: 'min', h: 'h', d: 'j' },
+      stats: { count: 'Occurrences', users: 'Utilisateurs', first: 'Première occurrence', last: 'Dernière occurrence', level: 'Niveau', project: 'Projet', status: 'Statut' },
+      substatus: { new: 'nouvelle', regressed: 'revenue', ongoing: 'en cours', escalating: 'en hausse', archived_until_escalating: 'archivée' },
     }
   : {
       refresh: 'Refresh',
@@ -102,12 +119,40 @@ const T = fr
       list: 'List',
       staleNone: (d) => `No unresolved error left unseen for ${d} days.`,
       staleCount: (n, d) => `${n} error${n > 1 ? 's' : ''} not seen for ${d} days:`,
+      total: (n) => `${n} unresolved error${n > 1 ? 's' : ''} over 14 days`,
+      shown: (n) => `the first ${n} shown`,
+      sortBy: 'Sort by',
+      sorts: { date: 'Last seen', new: 'Newest', freq: 'Most events', user: 'Most users' },
+      colError: 'Error',
+      colCount: 'Events',
+      colAge: 'Age',
+      ageHint: (d) => `First seen: ${d}`,
+      selectAll: 'Select all',
+      select: 'Select',
+      selected: (n) => `${n} selected`,
+      clear: 'Clear selection',
+      mergeNeeds: 'Merging needs at least two errors of the same Sentry project.',
+      check: 'Tick these errors',
+      units: { min: 'min', h: 'h', d: 'd' },
+      stats: { count: 'Events', users: 'Users', first: 'First seen', last: 'Last seen', level: 'Level', project: 'Project', status: 'Status' },
+      substatus: { new: 'new', regressed: 'back', ongoing: 'ongoing', escalating: 'escalating', archived_until_escalating: 'archived' },
     }
 
-const state = { data: null, projects: null, picking: false, open: null, context: {}, error: '', note: '', busy: false, sorting: false, confirm: '', days: null, stale: null, staleBusy: false }
-const send = (type, extra = {}) => squadron.send({ ...extra, type, to: me, lang })
+const state = { data: null, projects: null, picking: false, open: null, context: {}, error: '', note: '', busy: false, sorting: false, confirm: '', days: null, stale: null, staleBusy: false, selected: new Set(), sort: 'date' }
+const send = (type, extra = {}) => squadron.send({ ...extra, type, to: me, lang, sort: state.sort })
 
 const relative = new Intl.RelativeTimeFormat(lang, { numeric: 'auto' })
+const number = new Intl.NumberFormat(lang)
+const dateTime = new Intl.DateTimeFormat(lang, { dateStyle: 'medium', timeStyle: 'short' })
+const fullDate = (iso) => (Date.parse(iso) ? dateTime.format(new Date(iso)) : '')
+
+function age(iso) {
+  if (!Date.parse(iso)) return ''
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60000))
+  if (minutes < 60) return `${minutes} ${T.units.min}`
+  if (minutes < 2880) return `${Math.round(minutes / 60)} ${T.units.h}`
+  return `${Math.round(minutes / 1440)} ${T.units.d}`
+}
 function when(iso) {
   const at = Date.parse(iso)
   if (!at) return ''
@@ -165,7 +210,7 @@ const noiseOf = (account, id) => (state.data?.triage?.noise || []).find((n) => n
 const accountsOf = (items) => [...new Set(items.map((x) => x.account))].map((a) => [a, items.filter((x) => x.account === a).map((x) => x.id)])
 
 // A second click within 4 s confirms: these change Sentry for the whole team.
-function confirmButton(id, label, again, run) {
+function confirmButton(id, label, again, run, off = false) {
   const armed = state.confirm === id
   const click = () => {
     if (!armed) {
@@ -183,12 +228,13 @@ function confirmButton(id, label, again, run) {
     run()
     render()
   }
-  return h('button', { className: armed ? 'danger' : '', disabled: state.busy, onclick: click }, armed ? again : label)
+  return h('button', { className: armed ? 'danger' : '', disabled: state.busy || off, onclick: click }, armed ? again : label)
 }
 
 function setStatus(account, ids, status = 'resolved') {
   state.busy = true
   send('status', { account, ids, status })
+  ids.forEach((id) => state.selected.delete(`${account}|${id}`))
   if (state.stale) state.stale.issues = state.stale.issues.filter((x) => !(x.account === account && ids.includes(x.issue.id)))
   render()
 }
@@ -251,7 +297,7 @@ function triageView() {
             'div',
             { className: 'row' },
             h('span', { className: 'what' }, h('strong', {}, g.subject), ' · ', g.ids.map((id) => [key(g.account, id), ' '])),
-            confirmButton(`merge:${g.account}:${g.ids.join()}`, T.merge, T.confirmMerge, () => send('merge', { account: g.account, project: g.project, ids: g.ids })),
+            h('button', { onclick: () => { g.ids.forEach((id) => state.selected.add(`${g.account}|${id}`)); render() } }, T.check),
           ),
         ),
       ],
@@ -278,6 +324,92 @@ function openIssue(account, id) {
   state.note = ''
   if (!state.context[id]) send('detail', { account, id })
   render()
+}
+
+const keyOf = (x) => `${x.account}|${x.issue.id}`
+
+function bulkBar(picked) {
+  const items = picked.map((x) => ({ account: x.account, id: x.issue.id }))
+  const all = (status) => accountsOf(items).forEach(([a, ids]) => setStatus(a, ids, status))
+  const one = picked[0]
+  const mergeable = picked.length >= 2 && picked.every((x) => x.account === one.account && x.issue.project_id === one.issue.project_id)
+  const merge = () => {
+    state.selected.clear()
+    send('merge', { account: one.account, project: one.issue.project_id, ids: picked.map((x) => x.issue.id) })
+  }
+  return h(
+    'div',
+    { className: 'bar bulk', role: 'region', 'aria-label': T.selected(picked.length) },
+    h('strong', { className: 'status' }, T.selected(picked.length)),
+    h('button', { disabled: state.busy, onclick: () => all('resolved') }, T.resolve),
+    h('button', { disabled: state.busy, onclick: () => all('ignored') }, T.ignore),
+    h('span', { title: mergeable ? '' : T.mergeNeeds }, confirmButton(`merge:${picked.map(keyOf).join()}`, T.merge, T.confirmMerge, merge, !mergeable)),
+    h('button', { onclick: () => { state.selected.clear(); render() } }, T.clear),
+  )
+}
+
+function issuesView() {
+  const d = state.data
+  const picked = d.issues.filter((x) => state.selected.has(keyOf(x)))
+  const allOn = picked.length === d.issues.length
+  const toggleAll = () => {
+    if (allOn) state.selected.clear()
+    else d.issues.forEach((x) => state.selected.add(keyOf(x)))
+    render()
+  }
+  const sortSelect = h(
+    'label',
+    { className: 'sort muted' },
+    T.sortBy,
+    ' ',
+    h('select', { onchange: (e) => { state.sort = e.target.value; state.data = null; send('refresh'); render() } }, Object.entries(T.sorts).map(([v, l]) => h('option', { value: v, selected: v === state.sort }, l))),
+  )
+  const total = d.total ?? d.issues.length
+  return [
+    h('div', { className: 'bar' }, h('strong', { className: 'count' }, T.total(total), total > d.issues.length && h('span', { className: 'muted' }, ` · ${T.shown(d.issues.length)}`)), sortSelect),
+    picked.length > 0 && bulkBar(picked),
+    h(
+      'ul',
+      { className: 'issues' },
+      h('li', { className: 'head muted' }, h('input', { type: 'checkbox', checked: allOn, 'aria-label': T.selectAll, onchange: toggleAll }), h('span', {}, T.colError), h('span', { className: 'num' }, T.colCount), h('span', { className: 'num' }, T.colAge), h('span', {})),
+      d.issues.map((x) => {
+        const { account, issue: i, proposal } = x
+        const n = noiseOf(account, i.id)
+        const on = state.selected.has(keyOf(x))
+        const pick = (e) => {
+          if (e.target.checked) state.selected.add(keyOf(x))
+          else state.selected.delete(keyOf(x))
+          render()
+        }
+        return h(
+          'li',
+          { className: on ? 'picked' : '' },
+          h('input', { type: 'checkbox', checked: on, 'aria-label': `${T.select} ${i.short_id}`, onchange: pick }),
+          h(
+            'button',
+            { className: 'issue', title: `${i.short_id} · ${i.title}`, onclick: () => openIssue(account, i.id) },
+            h('span', { className: 'line' }, h('span', { className: 'key' }, i.short_id), h('span', { className: 'title' }, i.title)),
+            h(
+              'span',
+              { className: 'meta muted' },
+              [i.project, T.users(i.users), `${T.seen} ${when(i.last_seen)}`].join(' · '),
+              i.substatus === 'regressed' && [' ', h('span', { className: 'tag err' }, T.regressed)],
+              n && [' ', h('span', { className: 'tag' }, T.reasons[n.reason] || n.reason)],
+              proposal && [' ', tag(proposal)],
+            ),
+          ),
+          h('span', { className: 'num strong' }, number.format(Number(i.count) || 0)),
+          h('span', { className: 'num', title: T.ageHint(fullDate(i.first_seen)) }, age(i.first_seen)),
+          h(
+            'span',
+            { className: 'acts' },
+            h('button', { className: 'small', disabled: state.busy, onclick: () => setStatus(account, [i.id]) }, T.resolve),
+            h('button', { className: 'small', disabled: state.busy, onclick: () => setStatus(account, [i.id], 'ignored') }, T.ignore),
+          ),
+        )
+      }),
+    ),
+  ]
 }
 
 function listView() {
@@ -311,25 +443,7 @@ function listView() {
       ? h('p', { className: 'muted empty' }, T.noFollow)
       : !d.issues.length
         ? h('p', { className: 'muted empty' }, T.noIssue)
-        : h(
-            'ul',
-            { className: 'issues' },
-            d.issues.map(({ account, issue: i, proposal }) => {
-              const n = noiseOf(account, i.id)
-              return h(
-                'li',
-                {},
-                h(
-                  'button',
-                  { className: 'issue', onclick: () => openIssue(account, i.id) },
-                  h('span', { className: 'key' }, i.short_id),
-                  h('span', { className: 'title' }, i.title),
-                  h('span', {}, i.substatus === 'regressed' && h('span', { className: 'tag err' }, T.regressed), ' ', n && h('span', { className: 'tag' }, T.reasons[n.reason] || n.reason), ' ', tag(proposal)),
-                  h('span', { className: 'meta muted' }, [i.project, T.events(Number(i.count) || 0), T.users(i.users), `${T.seen} ${when(i.last_seen)}`].join(' · ')),
-                ),
-              )
-            }),
-          ),
+        : issuesView(),
     d.follows.length > 0 && h('p', { className: 'muted' }, d.auto ? T.auto : T.manual),
   ]
 }
@@ -363,7 +477,20 @@ function detailView() {
       'div',
       { className: 'detail' },
       h('h2', {}, `${i.short_id} · ${i.title}`),
-      h('p', { className: 'muted' }, [i.culprit, T.events(Number(i.count) || 0), T.users(i.users), `${T.seen} ${when(i.last_seen)}`].filter(Boolean).join(' · ')),
+      i.culprit && h('p', { className: 'muted' }, i.culprit),
+      h(
+        'dl',
+        { className: 'stats' },
+        [
+          [T.stats.count, number.format(Number(i.count) || 0)],
+          [T.stats.users, number.format(i.users || 0)],
+          [T.stats.first, `${fullDate(i.first_seen)} · ${when(i.first_seen)}`],
+          [T.stats.last, `${fullDate(i.last_seen)} · ${when(i.last_seen)}`],
+          [T.stats.status, T.substatus[i.substatus] || i.substatus || '—'],
+          [T.stats.level, i.level || '—'],
+          [T.stats.project, i.project],
+        ].map(([k, v]) => h('div', {}, h('dt', {}, k), h('dd', {}, v))),
+      ),
     ),
     n && h('p', { className: 'muted' }, T.noiseNote(T.reasons[n.reason] || n.reason, n.why)),
     state.note && h('p', { className: 'muted' }, state.note),
@@ -398,6 +525,8 @@ squadron.on((msg) => {
       state.data = msg
       state.busy = state.sorting = false
       state.days ??= msg.days
+      state.sort = msg.sort || state.sort
+      state.selected = new Set((msg.issues || []).map(keyOf).filter((k) => state.selected.has(k)))
       return render()
     case 'stale':
       state.stale = msg

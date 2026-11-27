@@ -1,3 +1,10 @@
+## 0.3.0 · 2026-11-27
+
+- The list shows the total of unresolved errors of the followed projects, and sorts by last seen, newest, most events or most users.
+- Each error shows its events, its age and its users, with Resolve and Ignore on its right, and its detail on a click: events, users, first and last seen with dates, status, level, project.
+- Check boxes select errors, or all of them, to resolve, ignore or merge at once; merging needs two errors of one Sentry project and a second click.
+- A triage group's button now ticks its errors, to merge them from the selection.
+
 ## 0.2.0 · 2026-11-27
 
 - Triage by Haiku: issues of one project with the same cause grouped, with **Merge in Sentry**.

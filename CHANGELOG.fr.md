@@ -1,3 +1,10 @@
+## 0.3.0 · 2026-11-27
+
+- La liste donne le total des erreurs non résolues des projets suivis, et se trie par dernière occurrence, plus récentes, plus d’occurrences ou plus d’utilisateurs.
+- Chaque erreur montre ses occurrences, son âge et ses utilisateurs, avec Résoudre et Ignorer à droite, et son détail d’un clic : occurrences, utilisateurs, première et dernière occurrence datées, statut, niveau, projet.
+- Des cases à cocher sélectionnent des erreurs, ou toutes, pour les résoudre, les ignorer ou les fusionner d’un coup ; fusionner demande deux erreurs d’un même projet Sentry et un second clic.
+- Le bouton d’un groupe du tri coche maintenant ses erreurs, pour les fusionner depuis la sélection.
+
 ## 0.2.0 · 2026-11-27
 
 - Tri par Haiku : les erreurs d’un même projet de même cause regroupées, avec **Fusionner dans Sentry**.

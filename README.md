@@ -8,10 +8,16 @@ The Sentry errors of each project next to your agents: sorted by Haiku, analysed
 - Open **Sentry** in an agent's toolbar and **Choose Sentry projects** to follow for this Squadron project.
 - Every few minutes (5 by default), the extension reads the unresolved issues of the followed projects. The first look only remembers what is already there. After that, each **new** issue, and each known issue that **came back** (regressed), brings a system notification and a badge on the Sentry button.
 
+### The list
+
+- At the top, the total of unresolved errors of the followed projects over 14 days (Sentry's count, beyond the 100 shown), and **Sort by** last seen, newest, most events or most users.
+- Each error shows its key, title, project, users and last seen, then its **events** and its **age** (since first seen) in columns, and **Resolve** and **Ignore** on its right. A click on it opens its detail: events, users, first and last seen with their dates, status, level, project, the analysis and the stack trace.
+- Check boxes select errors, or all of them from the header. A bar then gives **Resolve**, **Ignore** and **Merge in Sentry** for the selection; merging needs at least two errors of one Sentry project, and a second click.
+
 ### Triage
 
 - When the list of open issues changes, and at most once an hour otherwise, Haiku reads one line per issue (title, culprit, environment, release, URL, volume, first and last seen) without any tool, and answers:
-  - **Same subject**: issues of one Sentry project that share a cause. **Merge in Sentry** merges them, after a second click.
+  - **Same subject**: issues of one Sentry project that share a cause. **Tick these errors** selects them, to merge them from the selection bar.
   - **Nothing to fix**: an error of a deployment (`MEP`), of a local or development environment, of a test, or another obvious case such as a robot, each with its reason. **Resolve**, **Ignore**, or **Resolve all** after a second click.
 - These issues are tagged in the list, and their notification says *Probably nothing to fix*. They get no automatic analysis.
 - **Sort again** runs the triage at once.

@@ -1,6 +1,6 @@
 {
   "id": "sentry",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "api": 1,
   "squadron": ">=0.59.0",
   "name": {
@@ -8,8 +8,8 @@
     "fr": "Sentry"
   },
   "description": {
-    "en": "The Sentry errors of each project next to your agents. Each new or returning error comes with a notification and a fix proposed by Claude Code, which reads the repository without changing it; one click opens an agent to apply it. Agents can read the errors and their stack traces.",
-    "fr": "Les erreurs Sentry de chaque projet à côté de vos agents. Chaque erreur nouvelle ou revenue arrive avec une notification et une correction proposée par Claude Code, qui lit le dépôt sans le modifier ; un clic ouvre un agent pour l’appliquer. Les agents peuvent lire les erreurs et leurs stack traces."
+    "en": "The Sentry errors of each project next to your agents. Haiku sorts them: errors with the same cause grouped, those with nothing to fix (a deployment, a local environment, a test) set aside to close in one click, and those not seen for some days, the number chosen per project, listed to resolve. Claude Code analyses an error and proposes a plan, by itself or when you ask, reading the repository without changing it; no agent starts without you.",
+    "fr": "Les erreurs Sentry de chaque projet à côté de vos agents. Haiku les trie : les erreurs de même cause regroupées, celles qui n’ont rien à corriger (une mise en production, un environnement local, un test) mises de côté pour les fermer d’un clic, et celles sans occurrence depuis quelques jours, un nombre choisi par projet, listées pour les résoudre. Claude Code analyse une erreur et propose un plan, de lui-même ou à votre demande, en lisant le dépôt sans le modifier ; aucun agent ne démarre sans vous."
   },
   "logo": "logo.svg",
   "wasm": "target/wasm32-wasip2/release/sentry.wasm",
@@ -111,7 +111,7 @@
       },
       {
         "name": "issue",
-        "description": "Reads one Sentry issue of this project: its details, request, exception and stack trace with the code around each line, and the fix proposed when it came in, if any.",
+        "description": "Reads one Sentry issue of this project: its details, request, exception and stack trace with the code around each line, and the analysis written for it, if any.",
         "input": {
           "type": "object",
           "properties": {
@@ -131,12 +131,12 @@
         {
           "id": "auto",
           "label": {
-            "en": "Propose a fix for each new or returning error",
-            "fr": "Proposer une correction pour chaque erreur nouvelle ou revenue"
+            "en": "Analyse each new or returning error with Claude Code",
+            "fr": "Analyser chaque erreur nouvelle ou revenue avec Claude Code"
           },
           "hint": {
-            "en": "Claude Code reads the repository with read-only tools; each proposal uses your Claude plan.",
-            "fr": "Claude Code lit le dépôt avec des outils en lecture seule ; chaque proposition compte sur votre forfait Claude."
+            "en": "A diagnosis and a plan, read-only, on your Claude plan. Errors the triage sets aside are skipped. Off: the Analyse and plan button of each error does it when you ask.",
+            "fr": "Un diagnostic et un plan, en lecture seule, sur votre forfait Claude. Les erreurs que le tri met de côté sont sautées. Coupé : le bouton Analyser et planifier de chaque erreur le fait à votre demande."
           },
           "kind": "toggle",
           "default": true
@@ -144,8 +144,8 @@
         {
           "id": "model",
           "label": {
-            "en": "Model for the proposals",
-            "fr": "Modèle des propositions"
+            "en": "Model for the analyses",
+            "fr": "Modèle des analyses"
           },
           "kind": "select",
           "default": "sonnet",

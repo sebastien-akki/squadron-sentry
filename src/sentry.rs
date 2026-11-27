@@ -22,6 +22,29 @@ pub struct Issue {
     pub project: String,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Group {
+    pub subject: String,
+    pub project: String,
+    pub ids: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Noise {
+    pub id: String,
+    pub reason: String,
+    pub why: String,
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Triage {
+    pub ids: Vec<String>,
+    pub at: u64,
+    pub groups: Vec<Group>,
+    pub noise: Vec<Noise>,
+    pub error: String,
+}
+
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Job {
     pub account: String,
@@ -106,6 +129,107 @@ fn frame_line(f: &Value) -> String {
     out
 }
 
+fn tags(event: &Value, keys: &[&str]) -> Vec<String> {
+    event["tags"].as_array().into_iter().flatten().filter(|t| keys.contains(&s(&t["key"]).as_str())).map(|t| format!("{}={}", s(&t["key"]), s(&t["value"]))).collect()
+}
+
+fn cut(text: &str, max: usize) -> String {
+    text.trim().chars().take(max).collect()
+}
+
+// What the triage reads of an event: where it ran and which release.
+pub fn facts(event: &Value) -> String {
+    tags(event, &["environment", "release", "server_name", "url"]).iter().map(|t| cut(t, 120)).collect::<Vec<_>>().join(" ")
+}
+
+pub fn brief(i: &Issue, facts: &str) -> String {
+    format!("{} | {} | {} | {} | {} | {} | {} events, {} users | first {} | last {}", i.short_id, i.project, i.level, cut(&i.title, 200), cut(&i.culprit, 120), facts, i.count, i.users, i.first_seen, i.last_seen)
+}
+
+// The model answers with short ids; only listed issues are kept, and a group stays within one project.
+pub fn read_triage(answer: &str, list: &[Issue]) -> Option<(Vec<Group>, Vec<Noise>)> {
+    let v: Value = serde_json::from_str(answer.get(answer.find('{')?..=answer.rfind('}')?)?).ok()?;
+    let find = |x: &Value| list.iter().find(|i| i.short_id.eq_ignore_ascii_case(s(x).trim()));
+    let mut groups = Vec::new();
+    for g in v["groups"].as_array().into_iter().flatten() {
+        let mut members: Vec<&Issue> = Vec::new();
+        for i in g["ids"].as_array().into_iter().flatten().filter_map(find) {
+            if !members.iter().any(|m| m.id == i.id) {
+                members.push(i);
+            }
+        }
+        if members.len() >= 2 && members.iter().all(|m| m.project_id == members[0].project_id) {
+            groups.push(Group { subject: cut(&s(&g["subject"]), 120), project: members[0].project_id.clone(), ids: members.iter().map(|m| m.id.clone()).collect() });
+        }
+    }
+    let mut noise: Vec<Noise> = Vec::new();
+    for n in v["noise"].as_array().into_iter().flatten() {
+        let Some(i) = find(&n["id"]) else { continue };
+        if noise.iter().any(|x| x.id == i.id) {
+            continue;
+        }
+        let reason = s(&n["reason"]);
+        let reason = if ["mep", "local", "test"].contains(&reason.as_str()) { reason } else { "other".into() };
+        noise.push(Noise { id: i.id.clone(), reason, why: cut(&s(&n["why"]), 200) });
+    }
+    Some((groups, noise))
+}
+
+pub fn triage_system(fr: bool) -> &'static str {
+    if fr {
+        "Tu tries des erreurs Sentry pour une équipe de développeurs. Tu n’as aucun outil. Réponds uniquement par un objet JSON valide, sans texte autour ni bloc de code."
+    } else {
+        "You sort Sentry errors for a team of developers. You have no tools. Answer only with a valid JSON object, with no text around it and no code block."
+    }
+}
+
+pub fn triage_prompt(fr: bool, now: &str) -> String {
+    if fr {
+        format!(
+            "Nous sommes le {now} (UTC). Voici les erreurs Sentry non résolues, une par ligne : identifiant | projet | niveau | titre | origine | tags du dernier événement | volume | première et dernière occurrence.\n\n\
+1. Regroupe les erreurs d’un même projet qui ont visiblement la même cause : même exception au même endroit, même service tiers en panne, même requête. Un groupe a au moins deux erreurs. N’invente pas de groupe.\n\
+2. Repère les erreurs qui n’ont aucune raison d’être traitées :\n\
+- \"mep\" : une erreur passagère d’une mise en production (cache ou conteneur pas prêt, migration pas encore jouée, classe ou fichier introuvable, maintenance), apparue sur une courte période et plus revue depuis ;\n\
+- \"local\" : un environnement local ou de développement (environment local, dev ou development, localhost, 127.0.0.1, .lndo.site, .test, .local, .ddev.site) ;\n\
+- \"test\" : une erreur déclenchée volontairement ou par un test (message de test, route de test, robot de recette) ;\n\
+- \"other\" : une autre raison évidente (robot ou scan sur des adresses qui n’existent pas, navigateur obsolète, extension de navigateur).\n\
+Dans le doute, ne la mets pas.\n\n\
+Réponds avec exactement cet objet, les textes en français :\n\
+{{\"groups\":[{{\"subject\":\"le sujet commun en quelques mots\",\"ids\":[\"SHOP-1A\",\"SHOP-2B\"]}}],\"noise\":[{{\"id\":\"SHOP-3C\",\"reason\":\"mep\",\"why\":\"la raison en une phrase courte\"}}]}}\n\n\
+Erreurs :"
+        )
+    } else {
+        format!(
+            "It is {now} (UTC). Here are the unresolved Sentry errors, one per line: id | project | level | title | culprit | tags of the latest event | volume | first and last seen.\n\n\
+1. Group the errors of one project that clearly share a cause: same exception at the same place, same third-party service down, same query. A group has at least two errors. Do not make up groups.\n\
+2. Find the errors that have no reason to be worked on:\n\
+- \"mep\": a passing error of a deployment (cache or container not ready, migration not run yet, class or file not found, maintenance), seen over a short time and not since;\n\
+- \"local\": a local or development environment (environment local, dev or development, localhost, 127.0.0.1, .lndo.site, .test, .local, .ddev.site);\n\
+- \"test\": an error raised on purpose or by a test (test message, test route, QA robot);\n\
+- \"other\": another obvious reason (robot or scan on addresses that do not exist, outdated browser, browser extension).\n\
+When in doubt, leave it out.\n\n\
+Answer with exactly this object, the texts in English:\n\
+{{\"groups\":[{{\"subject\":\"the common subject in a few words\",\"ids\":[\"SHOP-1A\",\"SHOP-2B\"]}}],\"noise\":[{{\"id\":\"SHOP-3C\",\"reason\":\"mep\",\"why\":\"the reason in one short sentence\"}}]}}\n\n\
+Errors:"
+        )
+    }
+}
+
+// Howard Hinnant's days-to-civil: the extension has no date library.
+pub fn iso(ms: u64) -> String {
+    let secs = ms / 1000;
+    let z = (secs / 86_400) as i64 + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i64::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}T{:02}:{:02}Z", secs % 86_400 / 3600, secs % 3600 / 60)
+}
+
 pub fn context(issue: &Value, event: &Value) -> String {
     let mut out = vec![format!("Sentry issue {}: {}", s(&issue["shortId"]), s(&issue["title"]))];
     let culprit = s(&issue["culprit"]);
@@ -120,13 +244,7 @@ pub fn context(issue: &Value, event: &Value) -> String {
         s(&issue["firstSeen"]),
         s(&issue["lastSeen"])
     ));
-    let tags: Vec<String> = event["tags"]
-        .as_array()
-        .into_iter()
-        .flatten()
-        .filter(|t| ["environment", "release", "url", "transaction", "server_name", "browser", "os"].contains(&s(&t["key"]).as_str()))
-        .map(|t| format!("{}={}", s(&t["key"]), s(&t["value"])))
-        .collect();
+    let tags = tags(event, &["environment", "release", "url", "transaction", "server_name", "browser", "os"]);
     if !tags.is_empty() {
         out.push(format!("Tags: {}", tags.join(" · ")));
     }
@@ -161,9 +279,9 @@ pub fn context(issue: &Value, event: &Value) -> String {
 
 pub fn prompt(fr: bool) -> &'static str {
     if fr {
-        "L’extension Sentry de Squadron t’appelle pour une erreur de production qui vient d’arriver. Son détail et sa stack trace sont dans l’entrée standard. Le dossier courant est le dépôt du projet : lis le code nécessaire, sans rien modifier. Réponds en français, sans préambule ni conclusion, avec exactement ces trois sections :\n## Diagnostic\n2 à 4 phrases : ce qui se passe et la cause la plus probable, avec les fichiers et les lignes.\n## Correction proposée\nUn diff unifié minimal dans un bloc ```diff, ou, si aucune correction du code n’est sûre, ce qu’il faut vérifier.\n## À vérifier\n1 à 3 points : les risques de la correction et comment la tester."
+        "L’extension Sentry de Squadron t’appelle pour analyser une erreur de production. Son détail et sa stack trace sont dans l’entrée standard. Le dossier courant est le dépôt du projet : lis le code nécessaire, sans rien modifier. Réponds en français, sans préambule ni conclusion, avec exactement ces trois sections :\n## Diagnostic\n2 à 4 phrases : ce qui se passe et la cause la plus probable, avec les fichiers et les lignes.\n## Plan d’exécution\nLes étapes numérotées de la correction : les fichiers et fonctions à modifier, ce qu’il faut y changer, le test à ajouter. Si la correction tient en quelques lignes, ajoute un diff unifié minimal dans un bloc ```diff. Si aucune correction du code n’est sûre, dis ce qu’il faut vérifier d’abord.\n## À vérifier\n1 à 3 points : les risques de la correction et comment la tester."
     } else {
-        "Squadron's Sentry extension calls you for a production error that just came in. Its details and stack trace are on standard input. The current folder is the project's repository: read the code you need, without changing anything. Answer in English, with no preamble or conclusion, with exactly these three sections:\n## Diagnosis\n2 to 4 sentences: what happens and the most likely cause, with files and lines.\n## Proposed fix\nA minimal unified diff in a ```diff block, or, when no code fix is safe, what to check.\n## To check\n1 to 3 points: the risks of the fix and how to test it."
+        "Squadron's Sentry extension calls you to analyse a production error. Its details and stack trace are on standard input. The current folder is the project's repository: read the code you need, without changing anything. Answer in English, with no preamble or conclusion, with exactly these three sections:\n## Diagnosis\n2 to 4 sentences: what happens and the most likely cause, with files and lines.\n## Plan\nThe numbered steps of the fix: the files and functions to change, what to change in them, the test to add. When the fix is a few lines, add a minimal unified diff in a ```diff block. When no code fix is safe, say what to check first.\n## To check\n1 to 3 points: the risks of the fix and how to test it."
     }
 }
 
@@ -240,6 +358,40 @@ mod tests {
     fn long_context_is_cut_on_a_character() {
         let issue = json!({"shortId":"A","title":"é".repeat(MAX_CONTEXT)});
         assert!(context(&issue, &json!({})).ends_with("[…]"));
+    }
+
+    #[test]
+    fn triage_keeps_known_ids_and_one_project_groups() {
+        let mut a = listed("1", "7", "new");
+        a.short_id = "SHOP-1".into();
+        let mut b = listed("2", "7", "new");
+        b.short_id = "SHOP-2".into();
+        let mut c = listed("3", "8", "new");
+        c.short_id = "API-3".into();
+        let answer = r#"Voici :
+{"groups":[{"subject":"Redis","ids":["shop-1","SHOP-2","SHOP-1","NOPE-9"]},{"subject":"cross","ids":["SHOP-1","API-3"]},{"subject":"alone","ids":["API-3"]}],
+ "noise":[{"id":"API-3","reason":"local","why":"localhost"},{"id":"API-3","reason":"mep","why":"twice"},{"id":"SHOP-2","reason":"weird","why":"x"},{"id":"GONE-1","reason":"mep","why":"y"}]}
+fin"#;
+        let (groups, noise) = read_triage(answer, &[a, b, c]).unwrap();
+        assert_eq!(groups, [Group { subject: "Redis".into(), project: "7".into(), ids: vec!["1".into(), "2".into()] }]);
+        assert_eq!(noise.iter().map(|n| (n.id.as_str(), n.reason.as_str())).collect::<Vec<_>>(), [("3", "local"), ("2", "other")]);
+        assert!(read_triage("pas de JSON", &[]).is_none());
+    }
+
+    #[test]
+    fn brief_has_the_event_facts() {
+        let event = json!({"tags":[{"key":"environment","value":"local"},{"key":"url","value":"http://shop.lndo.site/"},{"key":"user","value":"x"}]});
+        let f = facts(&event);
+        assert_eq!(f, "environment=local url=http://shop.lndo.site/");
+        let i = Issue { short_id: "SHOP-1".into(), project: "shop".into(), title: "Boom".into(), count: "3".into(), ..Default::default() };
+        assert!(brief(&i, &f).starts_with("SHOP-1 | shop |  | Boom |  | environment=local"));
+    }
+
+    #[test]
+    fn iso_dates() {
+        assert_eq!(iso(0), "1970-01-01T00:00Z");
+        assert_eq!(iso(1_700_000_000_000), "2023-11-14T22:13Z");
+        assert_eq!(iso(1_795_800_000_000), "2026-11-27T17:20Z");
     }
 
     #[test]

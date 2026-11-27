@@ -194,3 +194,58 @@ details summary {
   border-radius: 3px;
   background: var(--surface-2);
 }
+
+.triage {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px 10px;
+  border-radius: 6px;
+  box-shadow: inset 0 0 0 1px var(--border);
+  font-size: 12.5px;
+}
+
+.triage h3 {
+  margin: 4px 0 0;
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.triage p {
+  margin: 0;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.row .what {
+  flex: 1;
+  min-width: 0;
+}
+
+.row .key {
+  font-family: var(--mono);
+  color: var(--text-muted);
+}
+
+.bar.end {
+  justify-content: flex-end;
+}
+
+.link {
+  height: auto;
+  padding: 0;
+  background: none;
+  color: var(--text-strong);
+  font-family: var(--mono);
+  font-size: 12px;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
+.days input {
+  width: 56px;
+}

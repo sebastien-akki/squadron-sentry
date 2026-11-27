@@ -1,12 +1,15 @@
 mod sentry;
 
-use sentry::{Issue, Job};
+use sentry::{Issue, Job, Triage};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{Value, json};
-use squadron_extension_api::{Account, Agent, Extension, Request, host, squadron_extension};
+use squadron_extension_api::{Account, Agent, Extension, Request, Response, host, squadron_extension};
+use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 struct Sentry;
+
+const HOUR: u64 = 3_600_000;
 
 fn en() -> bool {
     host::state_get("lang").as_deref() == Some("en")
@@ -71,13 +74,20 @@ fn encode(text: &str) -> String {
     text.bytes().map(|b| if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
 }
 
-fn call(id: &str, host_name: &str, method: &str, path: &str, body: Option<String>) -> Result<Value, String> {
-    let r = host::fetch(&Request {
+fn request(id: &str, host_name: &str, method: &str, path: &str, body: Option<String>) -> Request {
+    Request {
         method: method.into(),
         url: format!("https://{host_name}/api/0/{path}"),
         headers: vec![("Authorization".into(), format!("Bearer {{{{{id}.token}}}}")), ("Content-Type".into(), "application/json".into())],
         body,
-    })?;
+    }
+}
+
+fn call(id: &str, host_name: &str, method: &str, path: &str, body: Option<String>) -> Result<Value, String> {
+    reply(host::fetch(&request(id, host_name, method, path, body))?, path)
+}
+
+fn reply(r: Response, path: &str) -> Result<Value, String> {
     match r.status {
         200..=299 => Ok(serde_json::from_str(&r.body).unwrap_or(Value::Null)),
         401 | 403 => Err(t!("Sentry refuse ce jeton (code {}) : vérifiez ses droits.", "Sentry refused this token ({}): check its scopes.", r.status)),
@@ -86,12 +96,25 @@ fn call(id: &str, host_name: &str, method: &str, path: &str, body: Option<String
     }
 }
 
+fn org_path(acc: &Acc, path: &str) -> String {
+    format!("organizations/{}/{path}", encode(&acc.org))
+}
+
 fn api(acc: &Acc, method: &str, path: &str, body: Option<String>) -> Result<Value, String> {
-    call(&acc.id, &acc.host, method, &format!("organizations/{}/{path}", encode(&acc.org)), body)
+    call(&acc.id, &acc.host, method, &org_path(acc, path), body)
+}
+
+fn api_many(acc: &Acc, method: &str, paths: &[String], body: Option<String>) -> Vec<Result<Value, String>> {
+    let requests: Vec<Request> = paths.iter().map(|p| request(&acc.id, &acc.host, method, &org_path(acc, p), body.clone())).collect();
+    host::fetch_many(&requests).into_iter().zip(paths).map(|(r, p)| r.and_then(|r| reply(r, p))).collect()
 }
 
 fn list(acc: &Acc, project_ids: &[&str]) -> Result<Vec<Issue>, String> {
-    let mut path = "issues/?query=is%3Aunresolved&sort=date&limit=50&statsPeriod=14d".to_string();
+    search(acc, project_ids, "is:unresolved", "14d", 50)
+}
+
+fn search(acc: &Acc, project_ids: &[&str], query: &str, period: &str, limit: u32) -> Result<Vec<Issue>, String> {
+    let mut path = format!("issues/?query={}&sort=date&limit={limit}&statsPeriod={period}", encode(query));
     for p in project_ids {
         path.push_str(&format!("&project={}", encode(p)));
     }
@@ -106,10 +129,48 @@ fn follows() -> Vec<Follow> {
     get("follows")
 }
 
+// Haiku, without tools, sorts the open errors: same-cause groups and errors with nothing to fix.
+fn triage(acc: &Acc, found: &[Issue], force: bool) -> Triage {
+    let key = format!("triage:{}", acc.id);
+    let old: Triage = get(&key);
+    let mut ids: Vec<String> = found.iter().map(|i| i.id.clone()).collect();
+    ids.sort();
+    if found.is_empty() || (!force && ids == old.ids && now().saturating_sub(old.at) < HOUR) {
+        return old;
+    }
+    let facts_key = format!("facts:{}", acc.id);
+    let mut facts: BTreeMap<String, String> = get(&facts_key);
+    let missing: Vec<&Issue> = found.iter().filter(|i| !facts.contains_key(&i.id)).collect();
+    let paths: Vec<String> = missing.iter().map(|i| format!("issues/{}/events/latest/", encode(&i.id))).collect();
+    for (i, r) in missing.iter().zip(api_many(acc, "GET", &paths, None)) {
+        if let Ok(event) = r {
+            facts.insert(i.id.clone(), sentry::facts(&event));
+        }
+    }
+    facts.retain(|k, _| ids.contains(k));
+    put(&facts_key, &facts);
+    let lines: Vec<String> = found.iter().map(|i| sentry::brief(i, facts.get(&i.id).map_or("", String::as_str))).collect();
+    let input = format!("{}\n{}", sentry::triage_prompt(!en(), &sentry::iso(now())), lines.join("\n"));
+    let args: Vec<String> = ["-p", "--model", "haiku", "--tools", "", "--restricted", "--strict-mcp-config", "--no-session-persistence", "--append-system-prompt", sentry::triage_system(!en())].iter().map(|s| s.to_string()).collect();
+    let mut t = Triage { ids, at: now(), groups: old.groups, noise: old.noise, error: String::new() };
+    match host::exec_input("claude", &args, None, &input) {
+        Ok(o) if o.code == 0 => match sentry::read_triage(&o.stdout, found) {
+            Some((groups, noise)) => (t.groups, t.noise) = (groups, noise),
+            None => t.error = t!("réponse illisible du modèle", "unreadable answer from the model"),
+        },
+        Ok(o) => t.error = first_lines(&format!("{}\n{}", o.stderr, o.stdout)),
+        Err(e) => t.error = e,
+    }
+    put(&key, &t);
+    t
+}
+
 // Sentry projects are polled once per account, whichever Squadron projects follow them.
 fn poll() {
+    let started = now();
     let all = follows();
     let mut fresh_count = 0;
+    let mut sorted = false;
     let mut queue: Vec<Job> = get("queue");
     for acc in accounts() {
         let mine: Vec<&Follow> = all.iter().filter(|f| f.account == acc.id).collect();
@@ -117,8 +178,11 @@ fn poll() {
             continue;
         }
         let mut ids: Vec<&str> = mine.iter().map(|f| f.project_id.as_str()).collect();
+        ids.sort();
         ids.dedup();
         let Ok(found) = list(&acc, &ids) else { continue };
+        let t = triage(&acc, &found, false);
+        sorted |= t.at >= started;
         let seen: Vec<String> = get(&format!("seen:{}", acc.id));
         let regressed: Vec<String> = get(&format!("regressed:{}", acc.id));
         let mut primed: Vec<String> = get(&format!("primed:{}", acc.id));
@@ -134,9 +198,14 @@ fn poll() {
         for (issue, back) in f.found {
             let Some(follow) = mine.iter().find(|m| m.project_id == issue.project_id) else { continue };
             fresh_count += 1;
-            let what = if back { t!("Revenue", "Back") } else { t!("Nouvelle erreur", "New error") };
+            let noise = t.noise.iter().any(|n| n.id == issue.id);
+            let what = match (back, noise) {
+                (_, true) => t!("Probablement sans suite", "Probably nothing to fix"),
+                (true, _) => t!("Revenue", "Back"),
+                _ => t!("Nouvelle erreur", "New error"),
+            };
             host::notify(&format!("Sentry · {}", issue.project), &format!("{what} · {} · {}", issue.short_id, issue.title));
-            if option("auto") != false {
+            if option("auto") != false && !noise {
                 sentry::enqueue(&mut queue, Job { account: acc.id.clone(), id: issue.id.clone(), folder: follow.folder.clone(), regressed: back });
             }
         }
@@ -146,6 +215,8 @@ fn poll() {
         let unread: u64 = get::<u64>("unread") + fresh_count;
         put("unread", &unread);
         host::set_badge("sentry", Some(&unread.to_string()));
+    }
+    if fresh_count > 0 || sorted {
         post(json!({ "type": "changed", "to": "*" }));
     }
 }
@@ -258,7 +329,53 @@ fn init(agent: &Agent) -> Value {
     let accs: Vec<Value> = accounts().iter().map(|a| json!({ "id": a.id, "label": format!("{} · {}", a.org, a.host) })).collect();
     let mine: Vec<Follow> = follows().into_iter().filter(|f| f.folder == agent.project).collect();
     let (issues, errors) = issues_of(&agent.project);
-    json!({ "type": "init", "accounts": accs, "follows": mine, "issues": issues, "errors": errors, "auto": option("auto") != false })
+    let triage = sorted(&issues);
+    json!({ "type": "init", "accounts": accs, "follows": mine, "issues": issues, "errors": errors, "triage": triage, "days": days(&agent.project), "auto": option("auto") != false })
+}
+
+fn days(folder: &str) -> u64 {
+    host::state_get(&format!("days:{folder}")).and_then(|s| s.parse().ok()).unwrap_or(30)
+}
+
+// Unresolved errors of this project not seen for `days`; Sentry keeps 90 days of events.
+fn stale(folder: &str, days: u64) -> Result<Value, String> {
+    let days = days.clamp(1, 89);
+    host::state_set(&format!("days:{folder}"), Some(&days.to_string()));
+    let mine: Vec<Follow> = follows().into_iter().filter(|f| f.folder == folder).collect();
+    let mut out = Vec::new();
+    for acc in accounts() {
+        let ids: Vec<&str> = mine.iter().filter(|f| f.account == acc.id).map(|f| f.project_id.as_str()).collect();
+        if ids.is_empty() {
+            continue;
+        }
+        let found = search(&acc, &ids, &format!("is:unresolved lastSeen:+{days}d"), "90d", 100)?;
+        out.extend(found.into_iter().map(|i| json!({ "account": acc.id, "issue": i })));
+    }
+    Ok(json!({ "type": "stale", "days": days, "issues": out }))
+}
+
+// The triage of each account, cut to the issues this panel shows.
+fn sorted(issues: &[Value]) -> Value {
+    let shown = |acc: &str, id: &str| issues.iter().any(|v| v["account"] == acc && v["issue"]["id"] == id);
+    let (mut at, mut groups, mut noise, mut errors) = (0u64, Vec::new(), Vec::new(), Vec::new());
+    for acc in accounts() {
+        if !issues.iter().any(|v| v["account"] == acc.id.as_str()) {
+            continue;
+        }
+        let t: Triage = get(&format!("triage:{}", acc.id));
+        at = at.max(t.at);
+        if !t.error.is_empty() {
+            errors.push(t.error);
+        }
+        for g in t.groups {
+            let ids: Vec<String> = g.ids.into_iter().filter(|id| shown(&acc.id, id)).collect();
+            if ids.len() >= 2 {
+                groups.push(json!({ "account": acc.id, "subject": g.subject, "project": g.project, "ids": ids }));
+            }
+        }
+        noise.extend(t.noise.into_iter().filter(|n| shown(&acc.id, &n.id)).map(|n| json!({ "account": acc.id, "id": n.id, "reason": n.reason, "why": n.why })));
+    }
+    json!({ "at": at, "groups": groups, "noise": noise, "errors": errors })
 }
 
 fn projects() -> Value {
@@ -282,7 +399,7 @@ fn draft(agent: &Agent, account_id: &str, id: &str) -> Result<(), String> {
     let text = match ready {
         Some(p) => t!("Corrige l’erreur Sentry {} : {}\n\nUne première analyse propose ceci, à vérifier avant de l’appliquer :\n\n{}", "Fix the Sentry error {}: {}\n\nA first analysis proposes this, to check before applying it:\n\n{}", i.short_id, i.title, p),
         None => t!("Corrige l’erreur Sentry {} : {}\n\nLa stack trace est jointe. Trouve la cause, corrige-la et ajoute un test qui la couvre si c’est possible.", "Fix the Sentry error {}: {}\n\nThe stack trace is attached. Find the cause, fix it and add a test that covers it when possible.", i.short_id, i.title),
-    };
+    } + &t!("\n\nCommence par me présenter ton plan, et attends mon accord avant de modifier le moindre fichier.", "\n\nStart by showing me your plan, and wait for my go-ahead before changing any file.");
     let title: String = i.title.chars().take(60).collect();
     let d = json!({
         "name": format!("{} {title}", i.short_id),
@@ -336,7 +453,32 @@ fn answer(kind: &str, agent: &Agent, m: &Value) -> Result<Value, String> {
         "status" => {
             let acc = account(&text("account"))?;
             let status = if text("status") == "ignored" { "ignored" } else { "resolved" };
-            api(&acc, "PUT", &format!("issues/{}/", encode(&text("id"))), Some(json!({ "status": status }).to_string()))?;
+            let ids: Vec<String> = m["ids"].as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_else(|| vec![text("id")]);
+            let paths: Vec<String> = ids.iter().map(|id| format!("issues/{}/", encode(id))).collect();
+            api_many(&acc, "PUT", &paths, Some(json!({ "status": status }).to_string())).into_iter().collect::<Result<Vec<_>, _>>()?;
+            init(agent)
+        }
+        "merge" => {
+            let acc = account(&text("account"))?;
+            let ids: Vec<String> = m["ids"].as_array().into_iter().flatten().filter_map(|x| x.as_str().map(|id| format!("id={}", encode(id)))).collect();
+            if ids.len() < 2 {
+                return Err(t!("Il faut au moins deux erreurs à fusionner.", "Merging needs at least two errors."));
+            }
+            api(&acc, "PUT", &format!("issues/?project={}&{}", encode(&text("project")), ids.join("&")), Some(json!({ "merge": 1 }).to_string()))?;
+            init(agent)
+        }
+        "stale" => stale(&agent.project, m["days"].as_u64().unwrap_or(30))?,
+        "triage" => {
+            for acc in accounts() {
+                let mut ids: Vec<String> = follows().into_iter().filter(|f| f.account == acc.id).map(|f| f.project_id).collect();
+                if !follows().iter().any(|f| f.folder == agent.project && f.account == acc.id) {
+                    continue;
+                }
+                ids.sort();
+                ids.dedup();
+                let found = list(&acc, &ids.iter().map(String::as_str).collect::<Vec<_>>())?;
+                triage(&acc, &found, true);
+            }
             init(agent)
         }
         _ => return Err(format!("Unknown request {kind}.")),
@@ -390,7 +532,7 @@ impl Extension for Sentry {
                 let (issue, event) = details(&acc, id)?;
                 let mut out = sentry::context(&issue, &event);
                 if let Some(text) = found["proposal"]["text"].as_str().filter(|_| found["proposal"]["status"] == "ready") {
-                    out.push_str(&format!("\n\nA proposal written when the error came in (unverified):\n{text}"));
+                    out.push_str(&format!("\n\nAn analysis written by Claude Code, unverified:\n{text}"));
                 }
                 Ok(out)
             }

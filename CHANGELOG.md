@@ -1,3 +1,7 @@
+## 0.3.1 · 2026-11-27
+
+- Automatic analysis of each new or returning error is now off by default: several people following the same Sentry project would each analyse every error on their own plan. Analyse and plan stays on each error.
+
 ## 0.3.0 · 2026-11-27
 
 - The list shows the total of unresolved errors of the followed projects, and sorts by last seen, newest, most events or most users.

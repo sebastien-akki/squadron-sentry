@@ -1,6 +1,6 @@
 {
   "id": "sentry",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "api": 1,
   "squadron": ">=0.59.0",
   "name": {
@@ -139,7 +139,7 @@
             "fr": "Un diagnostic et un plan, en lecture seule, sur votre forfait Claude. Les erreurs que le tri met de côté sont sautées. Coupé : le bouton Analyser et planifier de chaque erreur le fait à votre demande."
           },
           "kind": "toggle",
-          "default": true
+          "default": false
         },
         {
           "id": "model",

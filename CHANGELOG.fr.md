@@ -1,3 +1,7 @@
+## 0.3.1 · 2026-11-27
+
+- L’analyse automatique de chaque erreur nouvelle ou revenue est maintenant coupée par défaut : plusieurs personnes suivant le même projet Sentry analyseraient chacune chaque erreur sur leur forfait. Analyser et planifier reste sur chaque erreur.
+
 ## 0.3.0 · 2026-11-27
 
 - La liste donne le total des erreurs non résolues des projets suivis, et se trie par dernière occurrence, plus récentes, plus d’occurrences ou plus d’utilisateurs.

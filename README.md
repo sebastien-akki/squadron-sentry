@@ -29,7 +29,7 @@ The Sentry errors of each project next to your agents: sorted by Haiku, analysed
 - With it off, or for any issue, **Analyse and plan** in the issue does the same when you ask.
 - **Fix with an agent** opens the New agent window in this project with the error and the plan as its first message, the stack trace as context, and a link to the issue on the agent's row. Nothing starts until you start it, and the agent is asked to show its plan and wait for your go-ahead before changing any file.
 - Agents can call `sentry_issues` and `sentry_issue` to read the errors of their project and their stack traces. Claude Code asks you first.
-- Settings: automatic analysis (on by default), the model of the analyses (Sonnet by default), how often to check Sentry, and which environments to watch (all by default).
+- Settings: automatic analysis (off by default, so that several people following one Sentry project do not each analyse every error; one of them can turn it on), the model of the analyses (Sonnet by default), how often to check Sentry, and which environments to watch (all by default).
 
 Each analysis and each triage runs Claude Code with your own plan; a triage is one short Haiku call.
 
